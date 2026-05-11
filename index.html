@@ -264,7 +264,6 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .login-error.show { display: block; }
 .login-version { font-size: .65rem; color: var(--text3); margin-top: .5rem; }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-msal-browser/3.10.0/msal-browser.min.js"></script>
 </head>
 <body>
 
@@ -903,10 +902,22 @@ let msalInstance = null;
 let msalAccount  = null;
 
 function initMsal() {
+  // Load MSAL dynamically to avoid blocking page render
+  if (window.msal) { _initMsalInstance(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js';
+  s.onload = _initMsalInstance;
+  s.onerror = () => {
+    const statusEl = document.getElementById('onedrive-status');
+    if (statusEl) { statusEl.textContent = '⚠️ MSAL nie załadowany — sprawdź połączenie'; statusEl.style.color='#ffcc00'; }
+  };
+  document.head.appendChild(s);
+}
+
+function _initMsalInstance() {
   try {
     msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
     msalInstance.initialize().then(() => {
-      // Handle redirect after login
       msalInstance.handleRedirectPromise().then(resp => {
         if (resp) { msalAccount = resp.account; updateOnedriveUI(); }
         else {
