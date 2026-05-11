@@ -264,6 +264,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .login-error.show { display: block; }
 .login-version { font-size: .65rem; color: var(--text3); margin-top: .5rem; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-msal-browser/3.10.0/msal-browser.min.js"></script>
 </head>
 <body>
 
@@ -328,6 +329,14 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
       <div class="upload-name">Rejestr kurierów</div>
       <div class="upload-status" id="status-kurierzy">Kliknij aby wczytać</div>
     </div>
+  </div>
+
+  <!-- OneDrive sync bar -->
+  <div style="display:flex;align-items:center;gap:.75rem;padding:.6rem 1rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:.75rem">
+    <div id="onedrive-status" style="font-size:.8rem;color:var(--text3);flex:1">🔗 Synchronizacja z OneDrive — nie zalogowano</div>
+    <button class="btn" id="btn-onedrive-login" onclick="onedriveLogin()" style="font-size:.75rem;padding:.3rem .8rem">Zaloguj Microsoft</button>
+    <button class="btn secondary" id="btn-onedrive-sync" onclick="onedriveSync()" style="font-size:.75rem;padding:.3rem .8rem;display:none">🔄 Pobierz z OneDrive</button>
+    <button class="btn secondary" id="btn-onedrive-logout" onclick="onedriveLogout()" style="font-size:.75rem;padding:.3rem .8rem;display:none;color:var(--text3)">Wyloguj</button>
   </div>
 
   <div class="kpi-grid" id="kpi-grid">
@@ -793,7 +802,58 @@ function restoreAllData() {
   }
 }
 
-// ===== LOGIN =====
+// ===== AUTO-FETCH FROM REPO =====
+const REPO_FILES = {
+  wydanie:  'data/Dokumenty_export.xlsx',
+  rejestr:  'data/Rejestr_operacji.xlsx',
+  kurierzy: 'data/Dokumenty_z_etykietami.xlsx'
+};
+
+async function fetchFileFromRepo(type) {
+  try {
+    const res = await fetch(REPO_FILES[type], { cache: 'no-cache' });
+    if (!res.ok) return false;
+    const buf = await res.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    if (!rows.length) return false;
+    data[type] = rows;
+    window.data = data;
+    saveDataToStorage(type, rows, REPO_FILES[type]);
+    const card = document.getElementById('card-' + type);
+    const status = document.getElementById('status-' + type);
+    if (card) card.classList.add('loaded');
+    if (status) {
+      status.textContent = `✓ ${rows.length} wierszy (repo)`;
+      status.className = 'upload-status ok';
+    }
+    console.log(`Auto-loaded ${type} from repo: ${rows.length} rows`);
+    return true;
+  } catch(e) {
+    console.log(`Repo fetch skipped for ${type}:`, e.message);
+    return false;
+  }
+}
+
+async function autoFetchFromRepo() {
+  // Try fetching all 3 files from repo in parallel
+  const results = await Promise.all([
+    fetchFileFromRepo('wydanie'),
+    fetchFileFromRepo('rejestr'),
+    fetchFileFromRepo('kurierzy')
+  ]);
+  const anyFetched = results.some(Boolean);
+  if (anyFetched) {
+    renderOverview();
+    if (data.rejestr.length) renderWydajnosc();
+    if (data.kurierzy.length) renderKurierzy();
+    renderTerminowosc();
+    renderKpiTab();
+  }
+}
+
+
 const LOGIN_PWD = 'Redlogis2026';
 function doLogin() {
   const val = document.getElementById('login-input').value;
@@ -821,8 +881,142 @@ function updateClock() {
 }
 setInterval(updateClock, 1000);
 updateClock();
-// Restore saved data and KPI inputs on page load
-window.addEventListener('DOMContentLoaded', () => { loadKpiInputs(); restoreAllData(); });
+// ===== ONEDRIVE / MICROSOFT GRAPH =====
+const MSAL_CONFIG = {
+  auth: {
+    clientId: '369b72bf-b25e-4ffe-8273-ba82bfd79092',
+    authority: 'https://login.microsoftonline.com/ad366acc-5c61-4862-b9c6-241bdbcc4167',
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: 'sessionStorage' }
+};
+
+const ONEDRIVE_FILES = {
+  wydanie:  'Dokumenty_export.xlsx',
+  rejestr:  'Rejestr_operacji.xlsx',
+  kurierzy: 'Dokumenty_z_etykietami.xlsx'
+};
+
+const FOLDER_PATH = '/drives/me/root:/Redlogis-Dashboard';
+
+let msalInstance = null;
+let msalAccount  = null;
+
+function initMsal() {
+  try {
+    msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+    msalInstance.initialize().then(() => {
+      // Handle redirect after login
+      msalInstance.handleRedirectPromise().then(resp => {
+        if (resp) { msalAccount = resp.account; updateOnedriveUI(); }
+        else {
+          const accounts = msalInstance.getAllAccounts();
+          if (accounts.length) { msalAccount = accounts[0]; updateOnedriveUI(); }
+        }
+      });
+    });
+  } catch(e) { console.warn('MSAL init failed:', e); }
+}
+
+function updateOnedriveUI() {
+  const statusEl  = document.getElementById('onedrive-status');
+  const btnLogin  = document.getElementById('btn-onedrive-login');
+  const btnSync   = document.getElementById('btn-onedrive-sync');
+  const btnLogout = document.getElementById('btn-onedrive-logout');
+  if (!statusEl) return;
+  if (msalAccount) {
+    statusEl.textContent  = `✅ Zalogowano: ${msalAccount.username}`;
+    statusEl.style.color  = 'var(--green)';
+    btnLogin.style.display  = 'none';
+    btnSync.style.display   = 'inline-block';
+    btnLogout.style.display = 'inline-block';
+  } else {
+    statusEl.textContent  = '🔗 Synchronizacja z OneDrive — nie zalogowano';
+    statusEl.style.color  = 'var(--text3)';
+    btnLogin.style.display  = 'inline-block';
+    btnSync.style.display   = 'none';
+    btnLogout.style.display = 'none';
+  }
+}
+
+async function onedriveLogin() {
+  if (!msalInstance) { initMsal(); return; }
+  try {
+    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read', 'Files.Read.All'] });
+    msalAccount = resp.account;
+    updateOnedriveUI();
+  } catch(e) { alert('Błąd logowania: ' + e.message); }
+}
+
+function onedriveLogout() {
+  if (!msalInstance) return;
+  msalInstance.logoutPopup({ account: msalAccount });
+  msalAccount = null;
+  updateOnedriveUI();
+}
+
+async function getGraphToken() {
+  const resp = await msalInstance.acquireTokenSilent({
+    scopes: ['Files.Read', 'Files.Read.All'],
+    account: msalAccount
+  });
+  return resp.accessToken;
+}
+
+async function onedriveSync() {
+  const statusEl = document.getElementById('onedrive-status');
+  statusEl.textContent = '⏳ Pobieranie plików z OneDrive...';
+  statusEl.style.color = 'var(--warn)';
+  try {
+    const token = await getGraphToken();
+    let anyLoaded = false;
+    for (const [type, filename] of Object.entries(ONEDRIVE_FILES)) {
+      try {
+        const url = `https://graph.microsoft.com/v1.0${FOLDER_PATH}/${filename}:/content`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) { console.warn(`Plik ${filename} nie znaleziony`); continue; }
+        const buf = await res.arrayBuffer();
+        const wb  = XLSX.read(buf, { type: 'array', cellDates: true });
+        const ws  = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        data[type] = rows;
+        window.data = data;
+        saveDataToStorage(type, rows, filename);
+        const card = document.getElementById('card-' + type);
+        const st   = document.getElementById('status-' + type);
+        if (card) card.classList.add('loaded');
+        if (st) { st.textContent = `✓ ${rows.length} wierszy (OneDrive)`; st.className = 'upload-status ok'; }
+        anyLoaded = true;
+        console.log(`Loaded ${type} from OneDrive: ${rows.length} rows`);
+      } catch(e) { console.warn(`Error loading ${filename}:`, e); }
+    }
+    if (anyLoaded) {
+      renderOverview();
+      if (data.rejestr.length)  renderWydajnosc();
+      if (data.kurierzy.length) renderKurierzy();
+      renderTerminowosc();
+      renderKpiTab();
+      statusEl.textContent = `✅ Zsynchronizowano z OneDrive (${new Date().toLocaleTimeString('pl-PL')})`;
+      statusEl.style.color = 'var(--green)';
+    } else {
+      statusEl.textContent = '⚠️ Nie znaleziono plików w folderze Redlogis-Dashboard';
+      statusEl.style.color = '#ffcc00';
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ Błąd: ' + e.message;
+    statusEl.style.color = '#ff4757';
+    console.error('OneDrive sync error:', e);
+  }
+}
+
+// Init MSAL on page load
+window.addEventListener('DOMContentLoaded', () => {
+  loadKpiInputs();
+  restoreAllData();
+  autoFetchFromRepo();
+  initMsal();
+});
+</script>
 
 // ===== TABS =====
 function switchTab(tab) {
