@@ -920,10 +920,15 @@ function _initMsalInstance() {
     msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
     msalInstance.initialize().then(() => {
       msalInstance.handleRedirectPromise().then(resp => {
-        if (resp) { msalAccount = resp.account; updateOnedriveUI(); }
+        if (resp) { msalAccount = resp.account; updateOnedriveUI(); onedriveSync(); }
         else {
           const accounts = msalInstance.getAllAccounts();
-          if (accounts.length) { msalAccount = accounts[0]; updateOnedriveUI(); }
+          if (accounts.length) {
+            msalAccount = accounts[0];
+            updateOnedriveUI();
+            // Auto-sync if already logged in
+            onedriveSync();
+          }
         }
       });
     });
@@ -954,9 +959,11 @@ function updateOnedriveUI() {
 async function onedriveLogin() {
   if (!msalInstance) { initMsal(); return; }
   try {
-    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read'] });
+    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read', 'Files.Read.All', 'Sites.Read.All'] });
     msalAccount = resp.account;
     updateOnedriveUI();
+    // Auto-sync immediately after login
+    await onedriveSync();
   } catch(e) { alert('Błąd logowania: ' + e.message); }
 }
 
@@ -969,7 +976,7 @@ function onedriveLogout() {
 
 async function getGraphToken() {
   const resp = await msalInstance.acquireTokenSilent({
-    scopes: ['Files.Read'],
+    scopes: ['Files.Read', 'Files.Read.All', 'Sites.Read.All'],
     account: msalAccount
   });
   return resp.accessToken;
