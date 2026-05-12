@@ -597,11 +597,11 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
         <div style="display:flex;align-items:center;gap:.5rem">
           <label style="font-size:.72rem;color:var(--text2);white-space:nowrap">Pracownicy:</label>
-          <input type="number" id="kpi-workers-count" class="form-input" style="width:70px;padding:.25rem .5rem;font-size:.8rem" placeholder="np. 20" oninput="recalcKpi()">
+          <input type="number" id="kpi-workers-count" class="form-input" style="width:70px;padding:.25rem .5rem;font-size:.8rem" placeholder="np. 20" oninput="saveKpiInputs();recalcKpi()" onchange="saveKpiInputs();recalcKpi()">
         </div>
         <div style="display:flex;align-items:center;gap:.5rem">
           <label style="font-size:.72rem;color:var(--text2);white-space:nowrap">Dni robocze:</label>
-          <input type="number" id="kpi-work-days" class="form-input" style="width:70px;padding:.25rem .5rem;font-size:.8rem" placeholder="np. 22" oninput="recalcKpi()">
+          <input type="number" id="kpi-work-days" class="form-input" style="width:70px;padding:.25rem .5rem;font-size:.8rem" placeholder="np. 22" oninput="saveKpiInputs();recalcKpi()" onchange="saveKpiInputs();recalcKpi()">
         </div>
       </div>
     </div>
@@ -953,7 +953,7 @@ function updateOnedriveUI() {
 async function onedriveLogin() {
   if (!msalInstance) { initMsal(); return; }
   try {
-    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read', 'Files.Read.All'] });
+    const resp = await msalInstance.loginPopup({ scopes: ['Files.Read'] });
     msalAccount = resp.account;
     updateOnedriveUI();
   } catch(e) { alert('Błąd logowania: ' + e.message); }
@@ -968,7 +968,7 @@ function onedriveLogout() {
 
 async function getGraphToken() {
   const resp = await msalInstance.acquireTokenSilent({
-    scopes: ['Files.Read', 'Files.Read.All'],
+    scopes: ['Files.Read'],
     account: msalAccount
   });
   return resp.accessToken;
@@ -1048,7 +1048,7 @@ function switchTab(tab) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   event.target.classList.add('active');
   document.getElementById('page-' + tab).classList.add('active');
-  if (tab === 'kpi') renderKpiTab();
+  if (tab === 'kpi') { loadKpiInputs(); renderKpiTab(); }
 }
 
 // ===== FILE LOADING =====
@@ -2652,18 +2652,25 @@ function renderKpiTab() {
 function saveKpiInputs() {
   const ids = ['kpi-workers-count','kpi-work-days','kpi-q-linie-errors','kpi-q-zk-errors','kpi-cost-total'];
   const saved = {};
-  ids.forEach(id => { const el = document.getElementById(id); if (el) saved[id] = el.value; });
-  localStorage.setItem('redlogis_kpi_inputs', JSON.stringify(saved));
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.value !== '') saved[id] = el.value;
+  });
+  try {
+    localStorage.setItem('redlogis_kpi_inputs', JSON.stringify(saved));
+  } catch(e) { console.warn('localStorage save failed:', e); }
 }
 
 function loadKpiInputs() {
   try {
-    const saved = JSON.parse(localStorage.getItem('redlogis_kpi_inputs') || '{}');
+    const raw = localStorage.getItem('redlogis_kpi_inputs');
+    if (!raw) return;
+    const saved = JSON.parse(raw);
     Object.entries(saved).forEach(([id, val]) => {
       const el = document.getElementById(id);
-      if (el && val !== undefined) el.value = val;
+      if (el && val !== undefined && val !== '') el.value = val;
     });
-  } catch(e) {}
+  } catch(e) { console.warn('localStorage load failed:', e); }
 }
 
 function recalcKpi() {
