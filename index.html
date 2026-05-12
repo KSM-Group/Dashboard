@@ -880,14 +880,81 @@ function updateClock() {
 }
 setInterval(updateClock, 1000);
 updateClock();
-// ===== ONEDRIVE / MICROSOFT GRAPH =====
+// ===== GITHUB CACHE =====
+const GITHUB_TOKEN = 'WKLEJ_TUTAJ_SWOJ_TOKEN'; // <- wklej swój PAT token
+const GITHUB_REPO  = 'Redlogis/Dashboard';
+const GITHUB_CACHE = 'data/cache.json';
+
+async function saveToGithubCache() {
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === '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') return;
+  try {
+    const cache = {
+      updated: new Date().toISOString(),
+      wydanie:  data.wydanie,
+      rejestr:  data.rejestr,
+      kurierzy: data.kurierzy
+    };
+    // Get current SHA of file (needed for update)
+    let sha = null;
+    const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_CACHE}`, {
+      headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json' }
+    });
+    if (getRes.ok) { const j = await getRes.json(); sha = j.sha; }
+
+    // Serialize with date handling
+    const content = JSON.stringify(cache, (k, v) => v instanceof Date ? '__DATE__' + v.toISOString() : v);
+    const b64 = btoa(unescape(encodeURIComponent(content)));
+
+    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_CACHE}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'cache: auto-update dashboard data', content: b64, ...(sha ? { sha } : {}) })
+    });
+    console.log('GitHub cache saved');
+  } catch(e) { console.warn('GitHub cache save failed:', e); }
+}
+
+async function loadFromGithubCache() {
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${GITHUB_REPO}/main/${GITHUB_CACHE}?t=${Date.now()}`);
+    if (!res.ok) return false;
+    const text = await res.text();
+    const cache = JSON.parse(text, (k, v) => {
+      if (typeof v === 'string' && v.startsWith('__DATE__')) return new Date(v.slice(8));
+      return v;
+    });
+    if (!cache.wydanie?.length) return false;
+    ['wydanie','rejestr','kurierzy'].forEach(type => {
+      if (cache[type]?.length) {
+        data[type] = cache[type];
+        saveDataToStorage(type, cache[type], 'github-cache');
+        const card = document.getElementById('card-' + type);
+        const st   = document.getElementById('status-' + type);
+        if (card) card.classList.add('loaded');
+        if (st) {
+          const d = cache.updated ? new Date(cache.updated).toLocaleString('pl-PL') : '?';
+          st.textContent = `✓ ${cache[type].length} wierszy (${d})`;
+          st.className = 'upload-status ok';
+        }
+      }
+    });
+    window.data = data;
+    renderOverview();
+    if (data.rejestr.length)  renderWydajnosc();
+    if (data.kurierzy.length) renderKurierzy();
+    renderTerminowosc();
+    renderKpiTab();
+    console.log('Loaded from GitHub cache, updated:', cache.updated);
+    return true;
+  } catch(e) { console.warn('GitHub cache load failed:', e); return false; }
+}
 const MSAL_CONFIG = {
   auth: {
     clientId: '369b72bf-b25e-4ffe-8273-ba82bfd79092',
     authority: 'https://login.microsoftonline.com/ad366acc-5c61-4862-b9c6-241bdbcc4167',
     redirectUri: window.location.origin + window.location.pathname
   },
-  cache: { cacheLocation: 'sessionStorage' }
+  cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
 };
 
 const ONEDRIVE_FILES = {
@@ -1017,6 +1084,8 @@ async function onedriveSync() {
       renderKpiTab();
       statusEl.textContent = `✅ Zsynchronizowano z OneDrive (${new Date().toLocaleTimeString('pl-PL')})`;
       statusEl.style.color = 'var(--green)';
+      // Save to GitHub cache for public access
+      await saveToGithubCache();
     } else {
       statusEl.textContent = '⚠️ Nie znaleziono plików w folderze Redlogis-Dashboard';
       statusEl.style.color = '#ffcc00';
@@ -1032,7 +1101,10 @@ async function onedriveSync() {
 window.addEventListener('DOMContentLoaded', () => {
   loadKpiInputs();
   restoreAllData();
-  autoFetchFromRepo();
+  // Try GitHub cache first (works for all users without login)
+  loadFromGithubCache().then(loaded => {
+    if (!loaded) autoFetchFromRepo();
+  });
   initMsal();
 });
 
