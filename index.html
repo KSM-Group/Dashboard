@@ -896,7 +896,8 @@ const ONEDRIVE_FILES = {
   kurierzy: 'Dokumenty z etykietami_export.xlsx'
 };
 
-const FOLDER_PATH = '/drives/me/root:/Redlogis-Dashboard';
+const ONEDRIVE_DRIVE_ID = 'b!VPdpmOMTDEe5lsA9JsS82PlIw4cgv5dEmH5dPvcj5nhemRRc5RgGTY55f1UCTxEx';
+const FOLDER_PATH = 'Redlogis-Dashboard';
 
 let msalInstance = null;
 let msalAccount  = null;
@@ -983,7 +984,7 @@ async function onedriveSync() {
     let anyLoaded = false;
     for (const [type, filename] of Object.entries(ONEDRIVE_FILES)) {
       try {
-        const url = `https://graph.microsoft.com/v1.0${FOLDER_PATH}/${filename}:/content`;
+        const url = `https://graph.microsoft.com/v1.0/drives/${ONEDRIVE_DRIVE_ID}/root:/${FOLDER_PATH}/${filename}:/content`;
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) { console.warn(`Plik ${filename} nie znaleziony`); continue; }
         const buf = await res.arrayBuffer();
