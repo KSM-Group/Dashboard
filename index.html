@@ -506,6 +506,11 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
   <div class="kpi-grid" id="term-kpi" style="margin-bottom:1rem">
     <div class="kpi-card green"><div class="kpi-label">Zamówienia na czas</div><div class="kpi-value green" id="t-zam-ok">—</div><div class="kpi-sub" id="t-zam-pct">—</div></div>
     <div class="kpi-card red" style="--red:#ff4757"><div class="kpi-label">Zamówienia opóźnione</div><div class="kpi-value" style="color:#ff4757" id="t-zam-del">—</div></div>
+    <div class="kpi-card" style="border-color:rgba(255,204,0,.4);background:linear-gradient(135deg,var(--surface) 0%,rgba(255,204,0,.05) 100%)">
+      <div class="kpi-label">% Terminowości</div>
+      <div class="kpi-value" style="color:#ffcc00;font-size:2rem" id="t-term-pct">—</div>
+      <div class="kpi-sub" id="t-term-sub" style="color:var(--text3)">zamówień zrealizowanych w terminie</div>
+    </div>
     <div class="kpi-card green"><div class="kpi-label">Linie na czas</div><div class="kpi-value green" id="t-lin-ok">—</div><div class="kpi-sub" id="t-lin-pct">—</div></div>
     <div class="kpi-card red" style="--red:#ff4757"><div class="kpi-label">Linie opóźnione</div><div class="kpi-value" style="color:#ff4757" id="t-lin-del">—</div></div>
     <div class="kpi-card green"><div class="kpi-label">Sztuki na czas</div><div class="kpi-value green" id="t-szt-ok">—</div><div class="kpi-sub" id="t-szt-pct">—</div></div>
@@ -749,7 +754,6 @@ const DATE_RX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 
 function saveDataToStorage(type, rows, filename) {
   try {
-    // Serialize: convert Date objects to tagged strings
     const serialized = JSON.stringify(rows, (k, v) => {
       if (v instanceof Date) return '__DATE__' + v.toISOString();
       return v;
@@ -757,7 +761,13 @@ function saveDataToStorage(type, rows, filename) {
     localStorage.setItem(DATA_KEYS[type], serialized);
     localStorage.setItem(META_KEYS[type], JSON.stringify({ filename, rows: rows.length, saved: new Date().toISOString() }));
   } catch(e) {
-    console.warn('localStorage full or error saving', type, e);
+    // localStorage full - clear old data and try again with smaller dataset
+    console.warn(`localStorage full for ${type}, clearing old data`);
+    try { localStorage.removeItem(DATA_KEYS[type]); } catch(e2) {}
+    // Save only metadata so UI shows correct status
+    try {
+      localStorage.setItem(META_KEYS[type], JSON.stringify({ filename, rows: rows.length, saved: new Date().toISOString() }));
+    } catch(e3) {}
   }
 }
 
@@ -886,32 +896,54 @@ const GITHUB_REPO  = 'Redlogis/Dashboard';
 const GITHUB_CACHE = 'data/cache.json';
 
 async function saveToGithubCache() {
-  if (!GITHUB_TOKEN || GITHUB_TOKEN === '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') return;
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === 'WKLEJ_TUTAJ_SWOJ_TOKEN') return;
   try {
+    const statusEl = document.getElementById('onedrive-status');
+    if (statusEl) { statusEl.textContent = '💾 Zapisywanie cache do GitHub...'; statusEl.style.color = 'var(--warn)'; }
+
     const cache = {
       updated: new Date().toISOString(),
       wydanie:  data.wydanie,
       rejestr:  data.rejestr,
       kurierzy: data.kurierzy
     };
-    // Get current SHA of file (needed for update)
+
+    const content = JSON.stringify(cache, (k, v) => v instanceof Date ? '__DATE__' + v.toISOString() : v);
+
+    // Check size - if too large, skip rejestr (largest file)
+    let finalContent = content;
+    if (content.length > 80000000) {
+      console.warn('Cache too large, skipping rejestr');
+      const smallCache = { updated: cache.updated, wydanie: cache.wydanie, kurierzy: cache.kurierzy, rejestr: [] };
+      finalContent = JSON.stringify(smallCache, (k, v) => v instanceof Date ? '__DATE__' + v.toISOString() : v);
+    }
+
+    // Base64 encode
+    const b64 = btoa(unescape(encodeURIComponent(finalContent)));
+
+    // Get current SHA
     let sha = null;
     const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_CACHE}`, {
       headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json' }
     });
     if (getRes.ok) { const j = await getRes.json(); sha = j.sha; }
 
-    // Serialize with date handling
-    const content = JSON.stringify(cache, (k, v) => v instanceof Date ? '__DATE__' + v.toISOString() : v);
-    const b64 = btoa(unescape(encodeURIComponent(content)));
-
-    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_CACHE}`, {
+    const putRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_CACHE}`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'cache: auto-update dashboard data', content: b64, ...(sha ? { sha } : {}) })
     });
-    console.log('GitHub cache saved');
-  } catch(e) { console.warn('GitHub cache save failed:', e); }
+    if (putRes.ok) {
+      console.log('GitHub cache saved successfully');
+      if (statusEl) { statusEl.textContent = `✅ Cache zapisany (${new Date().toLocaleTimeString('pl-PL')})`; statusEl.style.color = 'var(--green)'; }
+    } else {
+      const err = await putRes.json();
+      console.error('GitHub cache save failed:', err);
+      if (statusEl) { statusEl.textContent = `⚠️ Cache błąd: ${err.message}`; statusEl.style.color = '#ffcc00'; }
+    }
+  } catch(e) {
+    console.warn('GitHub cache save failed:', e);
+  }
 }
 
 async function loadFromGithubCache() {
@@ -1238,7 +1270,24 @@ function renderOverview() {
   document.getElementById('kpi-done').textContent = done || '—';
   document.getElementById('kpi-done-pct').textContent = total ? `${((done/total)*100).toFixed(1)}% zrealizowanych` : '—';
   document.getElementById('kpi-inprog').textContent = inprog || '—';
-  document.getElementById('kpi-ops').textContent = rejestr.length || '—';
+  // KPI cards
+  const opsWithoutZaladunek = rejestr.filter(r => String(getCol(r,'Typ operacji','typ_operacji')||'').trim() !== 'Załadunek').length;
+  document.getElementById('kpi-ops').textContent = opsWithoutZaladunek || '—';
+
+  // Labels - current month only
+  const now2 = new Date();
+  const curYM = now2.getFullYear() + '-' + String(now2.getMonth()+1).padStart(2,'0');
+  const kf = getCourierKeys(kurierzy);
+  const labelsThisMonth = kurierzy.filter(r => {
+    const d = kf.data ? r[kf.data] : '';
+    const dt = d instanceof Date ? d : new Date(d);
+    if (isNaN(dt)) return false;
+    const ym = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0');
+    return ym === curYM;
+  });
+  document.getElementById('kpi-labels').textContent = labelsThisMonth.length || '—';
+  const lsub = document.getElementById('kpi-labels-sub');
+  if (lsub) lsub.textContent = labelsThisMonth.length ? normalizeCarrier(kf.kurier ? [...new Set(labelsThisMonth.map(r=>r[kf.kurier]))].slice(0,3).join(', ') : '') : '—';
   document.getElementById('kpi-positions').textContent = positions || '—';
   const cancelled = wydanie.filter(r => String(getCol(r,'Status','Dokument status','status')||'').toLowerCase().includes('anulowany')).length;
   const cancelledEl = document.getElementById('kpi-cancelled');
@@ -1583,6 +1632,7 @@ function renderWydajnosc() {
 
     const typRaw = String(typKey ? r[typKey] : '').trim();
     if (typRaw === 'Zadanie zbiórki') byUser[userId].zbiorki++;
+    else if (typRaw === 'Przesunięcie' || typRaw === 'Przesunięcie ad-hoc') byUser[userId].zbiorki += 2; // ×2 multiplier
     else if (typRaw === 'Przyjęcie') byUser[userId].przyjecia++;
     else if (typRaw === 'Pakowanie') byUser[userId].pakowanie = (byUser[userId].pakowanie||0)+1;
     else if (typRaw === 'Załadunek') byUser[userId].zaladunek = (byUser[userId].zaladunek||0)+1;
@@ -2100,6 +2150,16 @@ function renderTerminowosc() {
   setKpi('t-lin-ok','t-lin-del','t-lin-pct', tLinOk, tLinDel);
   setKpi('t-szt-ok','t-szt-del','t-szt-pct', tSztOk, tSztDel);
 
+  // Overall punctuality KPI card
+  const termPct = tZamOk+tZamDel > 0 ? ((tZamOk/(tZamOk+tZamDel))*100) : null;
+  const termEl  = document.getElementById('t-term-pct');
+  const termSub = document.getElementById('t-term-sub');
+  if (termEl) {
+    termEl.textContent = termPct !== null ? termPct.toFixed(1)+'%' : '—';
+    termEl.style.color = termPct === null ? '#ffcc00' : termPct >= 99.5 ? 'var(--green)' : termPct >= 99.0 ? '#ffcc00' : '#ff4757';
+  }
+  if (termSub) termSub.textContent = termPct !== null ? `${tZamOk} z ${tZamOk+tZamDel} zamówień w terminie` : '—';
+
   // Trend chart — stacked bars (on time / delayed) + % line on second axis
   const okByDay  = days.map(d => zamG['SUMA'][d]?.ok  || 0);
   const delByDay = days.map(d => zamG['SUMA'][d]?.del || 0);
@@ -2553,6 +2613,8 @@ function buildModalOps() {
   const byUser = {};
   rows.forEach(r => {
     const u = String(getCol(r,'Użytkownik','uzytkownik')||'—').trim();
+    const typ = String(getCol(r,'Typ operacji','typ_operacji')||'').trim();
+    if (typ === 'Załadunek') return; // excluded from productivity
     byUser[u] = (byUser[u]||0)+1;
   });
   const typColors = {'Zadanie zbiórki':'var(--green)','Przyjęcie':'var(--accent2)','Pakowanie':'#a855f7','Załadunek':'var(--warn)'};
@@ -2560,7 +2622,11 @@ function buildModalOps() {
     `<tr><td style="color:${typColors[t]||'var(--text3)'}">${t}</td><td style="text-align:right;font-family:var(--font-mono)">${n}</td><td style="text-align:right;color:var(--text3)">${((n/rows.length)*100).toFixed(1)}%</td></tr>`
   ).join('');
   const topUsers = Object.entries(byUser).sort((a,b)=>b[1]-a[1]).slice(0,15);
-  const userTable = topUsers.map(([u,n])=>`<tr><td style="font-family:var(--font-mono)">${u}</td><td style="text-align:right;font-family:var(--font-mono)">${n}</td></tr>`).join('');
+  const userTable = topUsers.map(([u,n])=>{
+    const normalized = u.toLowerCase().replace(/\s+/g,' ').trim();
+    const userId = nameToId[normalized] || '—';
+    return `<tr><td style="font-family:var(--font-mono);color:var(--accent2)">${userId}</td><td style="text-align:right;font-family:var(--font-mono)">${n}</td></tr>`;
+  }).join('');
 
   const html = `
     <div class="modal-kpi-row">
