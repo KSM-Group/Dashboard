@@ -2891,6 +2891,8 @@ async function loadKpiFromGithub() {
     console.log('KPI settings loaded from GitHub');
   } catch(e) { console.warn('KPI settings load failed:', e); }
 }
+
+function saveKpiInputs() {
   const ids = ['kpi-workers-count','kpi-work-days','kpi-q-linie-errors','kpi-q-zk-errors','kpi-cost-total'];
   const saved = {};
   ids.forEach(id => {
