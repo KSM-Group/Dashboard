@@ -1674,7 +1674,7 @@ function renderWydajnosc() {
   rows.forEach(r => {
     const rawUser = String(userKey ? r[userKey] : '').trim();
     if (!rawUser) return;
-    const normalized = rawUser.toLowerCase().replace(/\s+/g,' ').trim();
+    const normalized = rawUser.toLowerCase().replace(/\s*-\s*/g, '-').replace(/\s+/g,' ').trim();
     const userId = nameToId[normalized] || rawUser;
     if (!byUser[userId]) byUser[userId] = { zbiorki:0, przyjecia:0, pakowanie:0, zaladunek:0, inne:0, days:{}, rawName: rawUser };
 
@@ -1714,7 +1714,7 @@ function renderWydajnosc() {
       return sum + (diff > 0 ? diff : 60000); // fallback: 1 min if only 1 click that day
     }, 0);
     const totalHours = totalMs / 3600000;
-    const opsPerH = totalHours > 0 ? (total / totalHours).toFixed(1) : '—';
+    const opsPerH = numDays > 0 ? (total / (numDays * 7.5)).toFixed(1) : '—';
 
     // Build per-day detail for tooltip/modal
     const dayDetails = Object.entries(d.days).sort((a,b)=>a[0].localeCompare(b[0])).map(([ds, times]) => {
@@ -2858,28 +2858,63 @@ function renderKpiTab() {
   recalcKpi();
 }
 
-function saveKpiInputs() {
+async function saveKpiToGithub() {
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === 'WKLEJ_TUTAJ_SWOJ_TOKEN') return;
+  const ids = ['kpi-workers-count','kpi-work-days','kpi-q-linie-errors','kpi-q-zk-errors','kpi-cost-total'];
+  const settings = {};
+  ids.forEach(id => { const el = document.getElementById(id); if (el && el.value !== '') settings[id] = el.value; });
+  try {
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(settings, null, 2))));
+    let sha = null;
+    const getRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/data/kpi-settings.json`, {
+      headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json' }
+    });
+    if (getRes.ok) { const j = await getRes.json(); sha = j.sha; }
+    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/data/kpi-settings.json`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'kpi: update settings', content, ...(sha ? { sha } : {}) })
+    });
+    console.log('KPI settings saved to GitHub');
+  } catch(e) { console.warn('KPI settings save failed:', e); }
+}
+
+async function loadKpiFromGithub() {
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${GITHUB_REPO}/main/data/kpi-settings.json?t=${Date.now()}`);
+    if (!res.ok) return;
+    const settings = await res.json();
+    Object.entries(settings).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el && val !== undefined) el.value = val;
+    });
+    console.log('KPI settings loaded from GitHub');
+  } catch(e) { console.warn('KPI settings load failed:', e); }
+}
   const ids = ['kpi-workers-count','kpi-work-days','kpi-q-linie-errors','kpi-q-zk-errors','kpi-cost-total'];
   const saved = {};
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el && el.value !== '') saved[id] = el.value;
   });
-  try {
-    localStorage.setItem('redlogis_kpi_inputs', JSON.stringify(saved));
-  } catch(e) { console.warn('localStorage save failed:', e); }
+  try { localStorage.setItem('redlogis_kpi_inputs', JSON.stringify(saved)); } catch(e) {}
+  saveKpiToGithub();
 }
 
 function loadKpiInputs() {
+  // First load from localStorage (instant)
   try {
     const raw = localStorage.getItem('redlogis_kpi_inputs');
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    Object.entries(saved).forEach(([id, val]) => {
-      const el = document.getElementById(id);
-      if (el && val !== undefined && val !== '') el.value = val;
-    });
-  } catch(e) { console.warn('localStorage load failed:', e); }
+    if (raw) {
+      const saved = JSON.parse(raw);
+      Object.entries(saved).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el && val !== undefined && val !== '') el.value = val;
+      });
+    }
+  } catch(e) {}
+  // Then load from GitHub (shared, overwrites local)
+  loadKpiFromGithub().then(() => recalcKpi());
 }
 
 function recalcKpi() {
