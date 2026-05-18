@@ -2199,6 +2199,7 @@ function renderTerminowosc() {
       const g = {zamG,linG,sztG,listG}[gName];
       if (!g[sposob]) { g[sposob] = {}; days.forEach(d=>g[sposob][d]={ok:0,del:0}); }
       if (!g[sposob][dayStr]) g[sposob][dayStr] = {ok:0,del:0};
+      if (!g['SUMA'][dayStr]) g['SUMA'][dayStr] = {ok:0,del:0};
       g[sposob][dayStr][key] += val;
       g['SUMA'][dayStr][key] += val;
     });
